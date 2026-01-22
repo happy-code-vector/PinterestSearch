@@ -1,40 +1,128 @@
+"""
+Pinterest Multi-Topic Scraper
+Scrapes Pinterest images across multiple aesthetic topics with NSFW filtering.
+"""
+
 import asyncio
 import random
 import json
 import os
+import logging
+import hashlib
 from pathlib import Path
+from typing import Set, List, Dict, Tuple
+from datetime import datetime
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+import aiohttp
+from dotenv import load_dotenv
+
+from topics import get_all_topics, get_topics_for_categories
 
 # ===================== CONFIG =====================
+load_dotenv()
+
 CONFIG = {
-    "keyword": "cute cat illustrations",          # Change this!
-    "max_pins": 500,                              # How many safe pins to collect
-    "output_folder": "pinterest_downloads",
-    "download_images": True,
-    "safe_keywords": ["cute", "kawaii", "cartoon", "illustration", "minimalist", "vintage", "aesthetic", "funny", "animal", "pet"],
-    "nsfw_blocklist": [
-        "nude", "naked", "sexy", "hot", "adult", "porn", "xxx", "erotic", "18+", "onlyfans",
-        "bikini", "lingerie", "booty", "ass", "tits", "boobs", "cleavage", "thong"
-    ],
-    "proxy": None,  # Example: "http://user:pass@ip:port" or None
-    "headless": True,
-    "timeout": 45000,  # ms
+    "categories": os.getenv("CATEGORIES", "ALL"),
+    "max_pins_per_topic": int(os.getenv("MAX_PINS_PER_TOPIC", "100")),
+    "output_folder": os.getenv("OUTPUT_FOLDER", "pinterest_downloads"),
+    "download_images": os.getenv("DOWNLOAD_IMAGES", "true").lower() == "true",
+    "headless": os.getenv("HEADLESS", "true").lower() == "true",
+    "timeout": int(os.getenv("TIMEOUT_MS", "45000")),
+    "proxy": os.getenv("PROXY", None) or None,
+    "use_nsfw_detector": os.getenv("USE_NSFW_DETECTOR", "false").lower() == "true",
+    "nsfw_threshold": float(os.getenv("NSFW_THRESHOLD", "0.7")),
+    "max_concurrent_topics": int(os.getenv("MAX_CONCURRENT_TOPICS", "3")),
+    "max_concurrent_downloads": int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "10")),
+    "log_level": os.getenv("LOG_LEVEL", "INFO"),
 }
 
-# ===================== HELPERS =====================
-def is_safe_pin(title: str, description: str) -> bool:
-    text = (title + " " + description).lower()
-    
-    # Must contain at least one safe keyword
-    has_safe = any(kw.lower() in text for kw in CONFIG["safe_keywords"])
-    
-    # Must NOT contain any nsfw keyword
-    has_nsfw = any(kw.lower() in text for kw in CONFIG["nsfw_blocklist"])
-    
-    return has_safe and not has_nsfw
+# NSFW blocklist - terms that indicate inappropriate content
+NSFW_BLOCKLIST = [
+    "nude", "naked", "sexy", "hot", "adult", "porn", "xxx", "erotic", "18+", "onlyfans",
+    "bikini", "lingerie", "booty", "ass", "tits", "boobs", "cleavage", "thong", "nsfw",
+    "sex", "topless", "underwear", "braless", "see-through", "explicit", "fetish",
+]
 
+# ===================== LOGGING =====================
+def setup_logging():
+    """Configure logging based on LOG_LEVEL."""
+    log_level = getattr(logging, CONFIG["log_level"].upper(), logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("pinterest_scraper.log", encoding="utf-8")
+        ]
+    )
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
+
+# ===================== SAFETY FILTERS =====================
+def is_text_safe(title: str, description: str) -> bool:
+    """Check if pin text is safe (no NSFW keywords)."""
+    text = (title + " " + description).lower()
+    return not any(kw in text for kw in NSFW_BLOCKLIST)
+
+def get_pin_hash(pin_id: str) -> str:
+    """Generate hash for deduplication."""
+    return hashlib.md5(pin_id.encode()).hexdigest()[:16]
+
+# ===================== IMAGE DOWNLOAD =====================
+async def download_image(session: aiohttp.ClientSession, image_url: str, save_path: Path) -> bool:
+    """Download image using HTTP request."""
+    try:
+        async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+            if response.status == 200:
+                content = await response.read()
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(save_path, "wb") as f:
+                    f.write(content)
+                return True
+            return False
+    except Exception as e:
+        logger.debug(f"Image download failed for {image_url}: {e}")
+        return False
+
+async def download_images_batch(pins: List[Dict], category: str, topic: str, output_base: Path):
+    """Download multiple images concurrently."""
+    if not CONFIG["download_images"]:
+        return
+
+    images_dir = output_base / category / topic.replace(" ", "_") / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    semaphore = asyncio.Semaphore(CONFIG["max_concurrent_downloads"])
+
+    async def download_with_semaphore(pin: Dict):
+        async with semaphore:
+            img_filename = f"{pin['pin_id']}.jpg"
+            img_path = images_dir / img_filename
+
+            if not img_path.exists():
+                # Get higher resolution image URL
+                img_url = pin["image_url"].replace("236x", "originals").replace("564x", "originals")
+                success = await download_image(
+                    asyncio.current_task().session,  # type: ignore
+                    img_url,
+                    img_path
+                )
+                if success:
+                    logger.debug(f"Downloaded: {img_filename}")
+                else:
+                    logger.debug(f"Failed: {img_filename}")
+
+    # Reuse session across downloads
+    async with aiohttp.ClientSession() as session:
+        asyncio.current_task().session = session  # type: ignore
+        tasks = [download_with_semaphore(pin) for pin in pins]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+# ===================== HUMAN-LIKE BEHAVIOR =====================
 async def human_like_scroll(page):
-    """Smooth human-like scrolling"""
+    """Smooth human-like scrolling."""
     viewport_height = page.viewport_size["height"]
     for _ in range(random.randint(2, 5)):
         scroll_distance = random.randint(300, viewport_height - 200)
@@ -42,158 +130,278 @@ async def human_like_scroll(page):
         await asyncio.sleep(random.uniform(0.8, 2.2))
 
 async def random_mouse_move(page):
-    """Random mouse movements to look more human"""
+    """Random mouse movements to look more human."""
     viewport = page.viewport_size
     x = random.randint(100, viewport["width"] - 100)
     y = random.randint(100, viewport["height"] - 100)
     await page.mouse.move(x, y, steps=random.randint(8, 15))
     await asyncio.sleep(random.uniform(0.3, 1.0))
 
-# ===================== MAIN SCRAPER =====================
-async def scrape_pinterest():
-    print(f"Starting Pinterest scrape for: '{CONFIG['keyword']}'")
-    print(f"Target: up to {CONFIG['max_pins']} safe pins\n")
+async def random_delay(min_sec: float = 1.8, max_sec: float = 4.2):
+    """Random delay to mimic human behavior."""
+    await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-    # Prepare folders
-    output_dir = Path(CONFIG["output_folder"])
-    output_dir.mkdir(exist_ok=True)
-    images_dir = output_dir / "images"
-    if CONFIG["download_images"]:
-        images_dir.mkdir(exist_ok=True)
+# ===================== SCRAPER =====================
+async def scrape_topic(
+    category: str,
+    topic: str,
+    collected_hashes: Set[str],
+    _output_base: Path,
+    progress_callback = None
+) -> List[Dict]:
+    """
+    Scrape Pinterest for a single topic.
 
+    Args:
+        category: Category name (e.g., "STUDY_ACADEMIA")
+        topic: Topic keyword to search
+        collected_hashes: Set of already collected pin hashes (for deduplication)
+        output_base: Base output directory
+        progress_callback: Optional callback for progress updates
+
+    Returns:
+        List of collected pin data
+    """
+    logger.info(f"Starting scrape: [{category}] {topic}")
     collected_pins = []
 
-    async with async_playwright() as p:
-        # Launch browser
-        browser = await p.chromium.launch(
-            headless=CONFIG["headless"],
-            proxy={"server": CONFIG["proxy"]} if CONFIG["proxy"] else None
-        )
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=CONFIG["headless"],
+                proxy={"server": CONFIG["proxy"]} if CONFIG["proxy"] else None
+            )
 
-        context = await browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            locale="en-US",
-            timezone_id="America/Los_Angeles",
-        )
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                locale="en-US",
+                timezone_id="America/New_York",
+            )
 
-        page = await context.new_page()
-        await page.set_extra_http_headers({
-            "Accept-Language": "en-US,en;q=0.9",
-        })
+            page = await context.new_page()
+            await page.set_extra_http_headers({
+                "Accept-Language": "en-US,en;q=0.9",
+            })
 
-        # Go to search page
-        search_url = f"https://www.pinterest.com/search/pins/?q={CONFIG['keyword'].replace(' ', '%20')}"
-        await page.goto(search_url, wait_until="domcontentloaded", timeout=CONFIG["timeout"])
+            # Go to search page
+            search_url = f"https://www.pinterest.com/search/pins/?q={topic.replace(' ', '%20')}"
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=CONFIG["timeout"])
 
-        try:
-            # Accept cookies if popup appears
             try:
-                await page.get_by_role("button", name="Accept all").click(timeout=8000)
-            except:
-                pass
+                # Accept cookies if popup appears
+                try:
+                    await page.get_by_role("button", name="Accept all").click(timeout=8000)
+                except:
+                    pass
 
-            last_height = await page.evaluate("document.body.scrollHeight")
-            scroll_attempts = 0
+                last_height = await page.evaluate("document.body.scrollHeight")
+                scroll_attempts = 0
+                max_scrolls = 50
 
-            while len(collected_pins) < CONFIG["max_pins"] and scroll_attempts < 80:
-                await human_like_scroll(page)
-                await random_mouse_move(page)
-                await asyncio.sleep(random.uniform(1.8, 4.2))  # Realistic wait
+                while len(collected_pins) < CONFIG["max_pins_per_topic"] and scroll_attempts < max_scrolls:
+                    await human_like_scroll(page)
+                    await random_mouse_move(page)
+                    await random_delay()
 
-                # Get current pin elements
-                pin_elements = await page.query_selector_all('div[data-test-id="pin"]')
+                    # Get current pin elements
+                    pin_elements = await page.query_selector_all('div[data-test-id="pin"]')
 
-                for pin_el in pin_elements:
-                    if len(collected_pins) >= CONFIG["max_pins"]:
-                        break
+                    for pin_el in pin_elements:
+                        if len(collected_pins) >= CONFIG["max_pins_per_topic"]:
+                            break
 
-                    try:
-                        # Title
-                        title_el = await pin_el.query_selector('div[data-test-id="pin-title"]')
-                        title = await title_el.inner_text() if title_el else ""
-                        title = title.strip()
+                        try:
+                            # Extract pin data
+                            title_el = await pin_el.query_selector('div[data-test-id="pin-title"]')
+                            title = await title_el.inner_text() if title_el else ""
+                            title = title.strip()
 
-                        # Description (sometimes in alt or separate div)
-                        desc_el = await pin_el.query_selector('div[data-test-id="pin-description"]')
-                        description = await desc_el.inner_text() if desc_el else ""
-                        description = description.strip()
+                            desc_el = await pin_el.query_selector('div[data-test-id="pin-description"]')
+                            description = await desc_el.inner_text() if desc_el else ""
+                            description = description.strip()
 
-                        # Image
-                        img_el = await pin_el.query_selector('img[src*="pinimg.com"]')
-                        img_src = await img_el.get_attribute("src") if img_el else None
+                            img_el = await pin_el.query_selector('img[src*="pinimg.com"]')
+                            img_src = await img_el.get_attribute("src") if img_el else None
 
-                        # Pin link / ID
-                        link_el = await pin_el.query_selector('a[href*="/pin/"]')
-                        pin_url = await link_el.get_attribute("href") if link_el else ""
-                        pin_id = pin_url.split("/pin/")[-1].split("/")[0] if pin_url else ""
+                            link_el = await pin_el.query_selector('a[href*="/pin/"]')
+                            pin_url = await link_el.get_attribute("href") if link_el else ""
+                            pin_id = pin_url.split("/pin/")[-1].split("/")[0] if pin_url else ""
 
-                        if img_src and pin_id:
-                            if is_safe_pin(title, description):
+                            if img_src and pin_id:
+                                pin_hash = get_pin_hash(pin_id)
+
+                                # Check duplicates
+                                if pin_hash in collected_hashes:
+                                    continue
+
+                                # Safety check
+                                if not is_text_safe(title, description):
+                                    logger.debug(f"Filtered NSFW pin: {title[:50]}")
+                                    continue
+
                                 pin_data = {
                                     "pin_id": pin_id,
                                     "title": title,
                                     "description": description,
                                     "image_url": img_src,
                                     "pin_url": f"https://www.pinterest.com{pin_url}" if pin_url else "",
-                                    "scraped_at": asyncio.get_event_loop().time()
+                                    "category": category,
+                                    "topic": topic,
+                                    "scraped_at": datetime.now().isoformat(),
                                 }
 
                                 collected_pins.append(pin_data)
-                                print(f"Found safe pin {len(collected_pins):3d}: {title[:60]}{'...' if len(title) > 60 else ''}")
+                                collected_hashes.add(pin_hash)
 
-                                # Download image if enabled
-                                if CONFIG["download_images"]:
-                                    img_filename = f"{pin_id}.jpg"
-                                    img_path = images_dir / img_filename
+                                if progress_callback:
+                                    progress_callback(category, topic, len(collected_pins))
 
-                                    if not img_path.exists():
-                                        try:
-                                            response = await page.goto(img_src, timeout=20000)
-                                            if response and response.ok:
-                                                await page.evaluate(f"""() => {{
-                                                    const a = document.createElement('a');
-                                                    a.href = '{img_src}';
-                                                    a.download = '{img_filename}';
-                                                    document.body.appendChild(a);
-                                                    a.click();
-                                                    a.remove();
-                                                }}""")
-                                                # Better: use direct download
-                                                # But for simplicity we'll use requests in real prod
-                                                print(f"  → Downloaded: {img_filename}")
-                                        except Exception as e:
-                                            print(f"  → Image download failed: {e}")
+                                logger.debug(f"[{category}] {topic}: Found pin {len(collected_pins)}")
 
-                    except Exception as e:
-                        continue
+                        except Exception as e:
+                            logger.debug(f"Error processing pin element: {e}")
+                            continue
 
-                # Check if we stopped loading new content
-                new_height = await page.evaluate("document.body.scrollHeight")
-                if new_height == last_height:
-                    scroll_attempts += 1
-                else:
-                    scroll_attempts = 0
-                    last_height = new_height
+                    # Check if we stopped loading new content
+                    new_height = await page.evaluate("document.body.scrollHeight")
+                    if new_height == last_height:
+                        scroll_attempts += 1
+                    else:
+                        scroll_attempts = 0
+                        last_height = new_height
 
-                if len(collected_pins) >= CONFIG["max_pins"]:
-                    break
+                    if len(collected_pins) >= CONFIG["max_pins_per_topic"]:
+                        break
 
-        except Exception as e:
-            print(f"Error during scraping: {e}")
+            except Exception as e:
+                logger.error(f"Error during scraping [{category}] {topic}: {e}")
 
-        finally:
-            await browser.close()
+            finally:
+                await browser.close()
 
-    # Save metadata
-    if collected_pins:
-        json_path = Path(CONFIG["output_folder"]) / f"{CONFIG['keyword'].replace(' ', '_')}_pins.json"
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(collected_pins, f, indent=2, ensure_ascii=False)
-        print(f"\nSaved {len(collected_pins)} safe pins to: {json_path}")
+    except Exception as e:
+        logger.error(f"Failed to scrape [{category}] {topic}: {e}")
 
-    print("\nScraping finished.")
+    return collected_pins
 
-# ===================== RUN =====================
+# ===================== MAIN ORCHESTRATOR =====================
+class ProgressTracker:
+    """Track and display scraping progress."""
+    def __init__(self, total_topics: int):
+        self.total_topics = total_topics
+        self.completed_topics = 0
+        self.total_pins = 0
+        self.category_progress: Dict[str, int] = {}
+
+    def update(self, category: str, _topic: str, pin_count: int):
+        """Update progress for a topic."""
+        if category not in self.category_progress:
+            self.category_progress[category] = 0
+        self.category_progress[category] += pin_count
+        self.total_pins += pin_count
+
+    def complete_topic(self, category: str, topic: str, pin_count: int):
+        """Mark a topic as completed."""
+        self.completed_topics += 1
+        self.update(category, topic, pin_count)
+        logger.info(
+            f"Progress: {self.completed_topics}/{self.total_topics} topics | "
+            f"Total pins: {self.total_pins} | "
+            f"Latest: [{category}] {topic} ({pin_count} pins)"
+        )
+
+async def scrape_all_topics():
+    """Scrape all topics according to configuration."""
+    # Determine which categories to process
+    if CONFIG["categories"].upper() == "ALL":
+        topics_to_scrape = get_all_topics()
+        logger.info(f"Scraping ALL categories - {len(topics_to_scrape)} total topics")
+    else:
+        category_list = [c.strip().upper().replace("/", "_") for c in CONFIG["categories"].split(",")]
+        topics_to_scrape = get_topics_for_categories(category_list)
+        logger.info(f"Scraping {len(category_list)} categories - {len(topics_to_scrape)} total topics")
+
+    # Setup output directory
+    output_base = Path(CONFIG["output_folder"])
+    output_base.mkdir(exist_ok=True)
+
+    # Track duplicates across all topics
+    collected_hashes: Set[str] = set()
+
+    # Track progress
+    tracker = ProgressTracker(len(topics_to_scrape))
+
+    # Store all collected pins
+    all_pins = []
+
+    # Process topics in batches
+    semaphore = asyncio.Semaphore(CONFIG["max_concurrent_topics"])
+
+    async def scrape_with_limit(category_topic: Tuple[str, str]):
+        category, topic = category_topic
+
+        async with semaphore:
+            pins = await scrape_topic(
+                category,
+                topic,
+                collected_hashes,
+                output_base,
+                progress_callback=None  # Can add callback for real-time updates
+            )
+
+            if pins:
+                # Save category/topic JSON
+                topic_dir = output_base / category / topic.replace(" ", "_")
+                topic_dir.mkdir(parents=True, exist_ok=True)
+
+                json_path = topic_dir / f"{topic.replace(' ', '_')}_pins.json"
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(pins, f, indent=2, ensure_ascii=False)
+
+                # Download images
+                await download_images_batch(pins, category, topic, output_base)
+
+                tracker.complete_topic(category, topic, len(pins))
+                all_pins.extend(pins)
+            else:
+                logger.warning(f"No pins collected for [{category}] {topic}")
+
+            # Random delay between topics
+            await random_delay(3, 8)
+
+    # Run all topic scrapers
+    tasks = [scrape_with_limit(ct) for ct in topics_to_scrape]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Save master JSON with all pins
+    master_json = output_base / "all_pins.json"
+    with open(master_json, "w", encoding="utf-8") as f:
+        json.dump(all_pins, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Scraping complete!")
+    logger.info(f"Total topics processed: {tracker.completed_topics}/{tracker.total_topics}")
+    logger.info(f"Total unique pins collected: {tracker.total_pins}")
+    logger.info(f"Master JSON saved to: {master_json}")
+    logger.info(f"{'='*60}\n")
+
+    # Print category breakdown
+    logger.info("Pins per category:")
+    for category, count in sorted(tracker.category_progress.items(), key=lambda x: x[1], reverse=True):
+        logger.info(f"  {category}: {count} pins")
+
+# ===================== ENTRY POINT =====================
 if __name__ == "__main__":
-    asyncio.run(scrape_pinterest())
+    logger.info("="*60)
+    logger.info("Pinterest Multi-Topic Scraper")
+    logger.info("="*60)
+    logger.info(f"Configuration:")
+    logger.info(f"  Categories: {CONFIG['categories']}")
+    logger.info(f"  Max pins per topic: {CONFIG['max_pins_per_topic']}")
+    logger.info(f"  Download images: {CONFIG['download_images']}")
+    logger.info(f"  Headless: {CONFIG['headless']}")
+    logger.info(f"  Concurrent topics: {CONFIG['max_concurrent_topics']}")
+    logger.info("="*60 + "\n")
+
+    asyncio.run(scrape_all_topics())
