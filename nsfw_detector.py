@@ -59,10 +59,9 @@ class NSFWDetector:
             self._detector = NudeClassifier()
             self._backend_name = "NudeNet"
             logger.info(f"Initialized {self._backend_name} detector")
-        except ImportError:
-            raise ImportError(
-                "NudeNet not installed. Install with: pip install nudenet"
-            )
+        except Exception as e:
+            logger.error(f"Failed to initialize Nudenet: {e}")
+            raise
 
     def _init_pytorch(self):
         """
@@ -86,11 +85,6 @@ class NSFWDetector:
 
             logger.info(f"Initialized {self._backend_name} detector")
             logger.info(f"NSFW threshold: {self.threshold}")
-
-        except ImportError:
-            raise ImportError(
-                "nsfw_detector not installed. Install with: pip install nsfw_detector"
-            )
         except Exception as e:
             logger.error(f"Failed to initialize PyTorch NSFW detector: {e}")
             raise
