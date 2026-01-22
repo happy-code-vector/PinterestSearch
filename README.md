@@ -84,6 +84,24 @@ Edit `.env`:
 MAX_PINS_PER_TOPIC=50
 ```
 
+### Run on Google Colab (Recommended)
+
+**Benefits:**
+- Free GPU/Compute resources
+- Direct Google Drive integration (no OAuth needed)
+- Runs in cloud (can close browser while scraping)
+
+1. Open [Pinterest_Scraper_Colab.ipynb](Pinterest_Scraper_Colab.ipynb) in Google Colab
+2. Run each cell in order
+3. Configure scraping preferences in the settings cell
+4. Content saves directly to your Google Drive
+
+The notebook includes interactive controls for:
+- Category selection
+- Pins per topic
+- Output path in Google Drive
+- Concurrency settings
+
 ## Categories
 
 | Category | Topics |
