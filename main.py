@@ -71,28 +71,8 @@ def get_pin_hash(pin_id: str) -> str:
     """Generate hash for deduplication."""
     return hashlib.md5(pin_id.encode()).hexdigest()[:16]
 
-async def download_image(session: aiohttp.ClientSession, image_url: str, save_path: Path) -> bool:
-    """Download image using HTTP request."""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Referer': 'https://www.pinterest.com/'
-        }
-        
-        async with session.get(image_url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
-            if response.status == 200:
-                content = await response.read()
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(save_path, "wb") as f:
-                    f.write(content)
-                return True
-            return False
-    except Exception as e:
-        logger.debug(f"Image download failed for {image_url}: {e}")
-        return False
-
 async def download_images_batch(pins: List[Dict], category: str, topic: str, output_base: Path):
-    """Download multiple images concurrently with NSFW pre-check."""
+    """Download multiple images concurrently with NSFW filtering on full-resolution images."""
     if not CONFIG["download_images"]:
         return
 
@@ -122,40 +102,43 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
             if img_path.exists():
                 return {"path": img_path, "success": True, "skipped": False}
 
-            # NSFW pre-check using thumbnail before downloading full resolution
-            if nsfw_detector:
-                try:
-                    thumbnail_url = pin["image_url"]  # Already 236x from scraping
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Referer': 'https://www.pinterest.com/'
-                    }
+            # Download full resolution image to memory first
+            full_url = pin["image_url"].replace("236x", "originals").replace("564x", "originals")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://www.pinterest.com/'
+            }
 
-                    async with session.get(thumbnail_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                        if response.status == 200:
-                            thumbnail_bytes = await response.read()
+            try:
+                async with session.get(full_url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                    if response.status != 200:
+                        logger.debug(f"Failed to download {img_filename}: HTTP {response.status}")
+                        return {"path": img_path, "success": False, "skipped": False}
 
-                            # Check NSFW on thumbnail before downloading full image
+                    # Read full image bytes into memory
+                    image_bytes = await response.read()
+
+                    # Check NSFW on the actual full-resolution image before saving
+                    if nsfw_detector:
+                        try:
                             is_nsfw = await asyncio.get_event_loop().run_in_executor(
-                                None, nsfw_detector.is_nsfw_from_bytes, thumbnail_bytes
+                                None, nsfw_detector.is_nsfw_from_bytes, image_bytes
                             )
 
                             if is_nsfw:
-                                logger.debug(f"Filtered NSFW image (pre-check): {img_filename}")
+                                logger.debug(f"Filtered NSFW image (full-resolution): {img_filename}")
                                 return {"path": img_path, "success": False, "skipped": "NSFW"}
-                except Exception as e:
-                    logger.debug(f"NSFW pre-check failed for {img_filename}: {e}")
-                    # Continue with download if pre-check fails
+                        except Exception as e:
+                            logger.debug(f"NSFW check failed for {img_filename}: {e}")
+                            # Continue with save if check fails
 
-            # Download full resolution image
-            full_url = pin["image_url"].replace("236x", "originals").replace("564x", "originals")
-            success = await download_image(session, full_url, img_path)
+                    # Save the image to disk only after passing NSFW check
+                    img_path.write_bytes(image_bytes)
+                    logger.debug(f"Downloaded: {img_filename}")
+                    return {"path": img_path, "success": True, "skipped": False}
 
-            if success:
-                logger.debug(f"Downloaded: {img_filename}")
-                return {"path": img_path, "success": True, "skipped": False}
-            else:
-                logger.debug(f"Failed: {img_filename}")
+            except Exception as e:
+                logger.debug(f"Failed: {img_filename} - {e}")
                 return {"path": img_path, "success": False, "skipped": False}
 
     # Use session properly
@@ -169,7 +152,7 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
         logger.info(f"Downloaded {success_count}/{len(pins)} images for [{category}] {topic}")
 
         if nsfw_filtered > 0:
-            logger.info(f"NSFW filter: Pre-checked and skipped {nsfw_filtered}/{len(pins)} images for [{category}] {topic}")
+            logger.info(f"NSFW filter: Skipped {nsfw_filtered}/{len(pins)} images for [{category}] {topic}")
 
 async def human_like_scroll(page):
     """Smooth human-like scrolling."""
