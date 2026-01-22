@@ -225,3 +225,5 @@ token.pkl
 # Playwright
 playwright-report/
 test-results/
+
+.claude
