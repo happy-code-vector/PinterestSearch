@@ -1,12 +1,13 @@
 """
 NSFW Image Detector Module
-Supports multiple backends: NudeNet and PyTorch
+Supports multiple backends: NudeNet and PyTorch (production-ready)
 """
 
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 from enum import Enum
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class NSFWDetector:
 
     Backends:
     - nudenet: Lightweight, fast, no heavy dependencies
-    - pytorch: More accurate, requires PyTorch installation
+    - pytorch: Production-ready PyTorch model using nsfw_detector package
     """
 
     def __init__(self, backend: str = "nudenet", threshold: float = 0.7):
@@ -64,41 +65,35 @@ class NSFWDetector:
             )
 
     def _init_pytorch(self):
-        """Initialize PyTorch-based detector."""
+        """
+        Initialize production PyTorch-based NSFW detector.
+
+        Uses the nsfw_detector package with EfficientNet V2 model.
+        Model is downloaded automatically on first use.
+        """
         try:
-            import torch
-            from torchvision import models, transforms
-            from PIL import Image
+            from nsfw_detector import NSFWDetector as PyTorchNSFWDetector
 
-            # Use a pre-trained ResNet50 model
-            # For production NSFW detection, you would load a trained NSFW model
-            # This is a placeholder - in practice you'd use a model trained on NSFW data
-            self._detector = models.resnet50(pretrained=True)
-            self._detector.eval()
+            # Initialize the detector - downloads model on first use
+            # Uses EfficientNet V2 by default (most accurate)
+            self._detector = PyTorchNSFWDetector()
 
-            # Image preprocessing
-            self._preprocess = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406],
-                    std=[0.229, 0.224, 0.225]
-                ),
-            ])
+            # Model types available: 'inceptionv3', 'mobilenet_v2', 'efficientnet_v2'
+            # efficientnet_v2 is the most accurate but slower
+            # We'll use the default which is efficientnet_v2
+            self._model_name = 'efficientnet_v2'
+            self._backend_name = f"PyTorch ({self._model_name.upper()})"
 
-            self._torch = torch
-            self._pil_image = Image
-            self._backend_name = "PyTorch (ResNet50)"
             logger.info(f"Initialized {self._backend_name} detector")
-            logger.warning(
-                "PyTorch backend uses generic ResNet50. "
-                "For production NSFW detection, use a properly trained model or NudeNet."
-            )
+            logger.info(f"NSFW threshold: {self.threshold}")
+
         except ImportError:
             raise ImportError(
-                "PyTorch not installed. Install with: pip install torch torchvision Pillow"
+                "nsfw_detector not installed. Install with: pip install nsfw_detector"
             )
+        except Exception as e:
+            logger.error(f"Failed to initialize PyTorch NSFW detector: {e}")
+            raise
 
     def is_nsfw(self, image_path: str) -> bool:
         """
@@ -202,78 +197,87 @@ class NSFWDetector:
             return False
         finally:
             # Clean up temp file
-            import os
             try:
                 os.unlink(tmp_path)
             except:
                 pass
 
-    def _check_pytorch_from_bytes(self, image_bytes: bytes) -> bool:
-        """Check NSFW using PyTorch from in-memory bytes."""
-        try:
-            from io import BytesIO
-
-            # Load image from bytes
-            img = self._pil_image.open(BytesIO(image_bytes)).convert('RGB')
-            img_tensor = self._preprocess(img).unsqueeze(0)
-
-            # Run inference
-            with self._torch.no_grad():
-                outputs = self._detector(img_tensor)
-
-            # Get the predicted class and confidence
-            probabilities = self._torch.nn.functional.softmax(outputs[0], dim=0)
-            max_prob, predicted_class = self._torch.max(probabilities, 0)
-
-            logger.debug(
-                f"PyTorch check from bytes (class={predicted_class.item()}, "
-                f"prob={max_prob.item():.3f}) - Note: Using generic ResNet50"
-            )
-
-            # Using generic ResNet50, so always return False (safe)
-            # In production, use a model actually trained on NSFW data
-            return False
-
-        except Exception as e:
-            logger.error(f"PyTorch detection from bytes error: {e}")
-            return False
-
     def _check_pytorch(self, image_path: str) -> bool:
-        """
-        Check NSFW using PyTorch.
-
-        Note: This is a placeholder implementation using generic ResNet50.
-        For production use, replace with a trained NSFW model.
-        """
+        """Check NSFW using PyTorch."""
         try:
-            # Load and preprocess image
-            img = self._pil_image.open(image_path).convert('RGB')
-            img_tensor = self._preprocess(img).unsqueeze(0)
+            # nsfw_detector.predict() returns: {'porn': prob, 'sexy': prob, 'hentai': prob, 'neutral': prob, 'drawings': prob}
+            predictions = self._detector.predict(image_path)
 
-            # Run inference
-            with self._torch.no_grad():
-                outputs = self._detector(img_tensor)
-
-            # Get the predicted class and confidence
-            # Note: ImageNet classes don't include NSFW, so this is a simplified check
-            # In production, use a model actually trained on NSFW data
-            probabilities = self._torch.nn.functional.softmax(outputs[0], dim=0)
-            max_prob, predicted_class = self._torch.max(probabilities, 0)
-
-            # Placeholder: This would need a proper NSFW-trained model
-            # For now, we'll return False (safe) as this is not a real NSFW detector
-            logger.debug(
-                f"PyTorch check: {image_path} (class={predicted_class.item()}, "
-                f"prob={max_prob.item():.3f}) - Note: Using generic ResNet50"
+            # Get NSFW probability (sum of porn, sexy, hentai)
+            nsfw_score = (
+                predictions.get('porn', 0.0) +
+                predictions.get('sexy', 0.0) +
+                predictions.get('hentai', 0.0)
             )
 
-            # In production, check if predicted class is NSFW and probability > threshold
-            # For now, always return False since we're using a generic model
-            return False
+            is_nsfw = nsfw_score > self.threshold
+
+            if is_nsfw:
+                logger.debug(
+                    f"PyTorch: NSFW detected for {image_path} "
+                    f"(score={nsfw_score:.3f} > threshold={self.threshold})"
+                )
+            else:
+                logger.debug(
+                    f"PyTorch: Safe (score={nsfw_score:.3f}, "
+                    f"neutral={predictions.get('neutral', 0.0):.3f})"
+                )
+
+            return is_nsfw
 
         except Exception as e:
             logger.error(f"PyTorch detection error: {e}")
             return False
+
+    def _check_pytorch_from_bytes(self, image_bytes: bytes) -> bool:
+        """Check NSFW using PyTorch from in-memory bytes."""
+        import tempfile
+
+        # nsfw_detector requires a file path, so save bytes to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            tmp_file.write(image_bytes)
+            tmp_path = tmp_file.name
+
+        try:
+            # nsfw_detector.predict() returns: {'porn': prob, 'sexy': prob, 'hentai': prob, 'neutral': prob, 'drawings': prob}
+            predictions = self._detector.predict(tmp_path)
+
+            # Get NSFW probability (sum of porn, sexy, hentai)
+            nsfw_score = (
+                predictions.get('porn', 0.0) +
+                predictions.get('sexy', 0.0) +
+                predictions.get('hentai', 0.0)
+            )
+
+            is_nsfw = nsfw_score > self.threshold
+
+            if is_nsfw:
+                logger.debug(
+                    f"PyTorch: NSFW detected from bytes "
+                    f"(score={nsfw_score:.3f} > threshold={self.threshold})"
+                )
+            else:
+                logger.debug(
+                    f"PyTorch: Safe from bytes (score={nsfw_score:.3f}, "
+                    f"neutral={predictions.get('neutral', 0.0):.3f})"
+                )
+
+            return is_nsfw
+
+        except Exception as e:
+            logger.error(f"PyTorch detection from bytes error: {e}")
+            return False
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
 
     def get_backend_name(self) -> str:
         """Get the name of the current backend."""
@@ -281,11 +285,16 @@ class NSFWDetector:
 
     def get_info(self) -> Dict[str, Any]:
         """Get information about the detector."""
-        return {
+        info = {
             "backend": self.backend,
             "backend_name": self._backend_name,
             "threshold": self.threshold,
         }
+
+        if self.backend == NSFWBackend.PYTORCH.value:
+            info["model"] = self._model_name if hasattr(self, '_model_name') else "unknown"
+
+        return info
 
 
 # Convenience function for quick checks
