@@ -54,9 +54,9 @@ class NSFWDetector:
     def _init_nudenet(self):
         """Initialize NudeNet detector."""
         try:
-            from nudenet import NudeClassifier
+            from nudenet import NudeDetector
 
-            self._detector = NudeClassifier()
+            self._detector = NudeDetector()
             self._backend_name = "NudeNet"
             logger.info(f"Initialized {self._backend_name} detector")
         except Exception as e:
@@ -144,22 +144,45 @@ class NSFWDetector:
 
     def _check_nudenet(self, image_path: str) -> bool:
         """Check NSFW using NudeNet."""
-        result = self._detector.classify(image_path)
+        detections = self._detector.detect(image_path)
 
-        # NudeNet returns: {'unsafe': bool, 'score': float}
-        unsafe = result.get('unsafe', False)
-        score = result.get('score', 0.0)
+        # NudeDetector.detect() returns a list of detections
+        # Each detection: {'class': str, 'score': float, 'box': [x, y, w, h]}
+        # NSFW classes are those with _EXPOSED suffix
+        if not detections:
+            logger.debug(f"NudeNet detected safe: {image_path} (no detections)")
+            return False
 
-        # Use both unsafe flag and score threshold
-        if unsafe:
-            logger.debug(f"NudeNet detected NSFW: {image_path} (unsafe=True, score={score:.3f})")
+        # Check for NSFW classes (those ending with _EXPOSED)
+        nsfw_classes = [
+            "FEMALE_GENITALIA_COVERED",  # Treat covered as potentially NSFW too
+            "BUTTOCKS_EXPOSED",
+            "FEMALE_BREAST_EXPOSED",
+            "FEMALE_GENITALIA_EXPOSED",
+            "MALE_BREAST_EXPOSED",
+            "ANUS_EXPOSED",
+            "BELLY_EXPOSED",
+            "MALE_GENITALIA_EXPOSED",
+            "ARMPITS_EXPOSED",
+        ]
+
+        max_score = 0.0
+        detected_nsfw = False
+
+        for detection in detections:
+            class_name = detection.get('class', '')
+            score = detection.get('score', 0.0)
+
+            if class_name in nsfw_classes:
+                detected_nsfw = True
+                max_score = max(max_score, score)
+                logger.debug(f"NudeNet detected NSFW class: {class_name} (score={score:.3f})")
+
+        if detected_nsfw and max_score > self.threshold:
+            logger.debug(f"NudeNet detected NSFW: {image_path} (max_score={max_score:.3f} > threshold={self.threshold})")
             return True
 
-        if score > self.threshold:
-            logger.debug(f"NudeNet detected NSFW: {image_path} (score={score:.3f} > threshold={self.threshold})")
-            return True
-
-        logger.debug(f"NudeNet detected safe: {image_path} (score={score:.3f})")
+        logger.debug(f"NudeNet detected safe: {image_path} (max_score={max_score:.3f})")
         return False
 
     def _check_nudenet_from_bytes(self, image_bytes: bytes) -> bool:
@@ -172,22 +195,45 @@ class NSFWDetector:
             tmp_path = tmp_file.name
 
         try:
-            result = self._detector.classify(tmp_path)
+            detections = self._detector.detect(tmp_path)
 
-            # NudeNet returns: {'unsafe': bool, 'score': float}
-            unsafe = result.get('unsafe', False)
-            score = result.get('score', 0.0)
+            # NudeDetector.detect() returns a list of detections
+            # Each detection: {'class': str, 'score': float, 'box': [x, y, w, h]}
+            # NSFW classes are those with _EXPOSED suffix
+            if not detections:
+                logger.debug(f"NudeNet detected safe from bytes (no detections)")
+                return False
 
-            # Use both unsafe flag and score threshold
-            if unsafe:
-                logger.debug(f"NudeNet detected NSFW from bytes (unsafe=True, score={score:.3f})")
+            # Check for NSFW classes (those ending with _EXPOSED)
+            nsfw_classes = [
+                "FEMALE_GENITALIA_COVERED",  # Treat covered as potentially NSFW too
+                "BUTTOCKS_EXPOSED",
+                "FEMALE_BREAST_EXPOSED",
+                "FEMALE_GENITALIA_EXPOSED",
+                "MALE_BREAST_EXPOSED",
+                "ANUS_EXPOSED",
+                "BELLY_EXPOSED",
+                "MALE_GENITALIA_EXPOSED",
+                "ARMPITS_EXPOSED",
+            ]
+
+            max_score = 0.0
+            detected_nsfw = False
+
+            for detection in detections:
+                class_name = detection.get('class', '')
+                score = detection.get('score', 0.0)
+
+                if class_name in nsfw_classes:
+                    detected_nsfw = True
+                    max_score = max(max_score, score)
+                    logger.debug(f"NudeNet detected NSFW class from bytes: {class_name} (score={score:.3f})")
+
+            if detected_nsfw and max_score > self.threshold:
+                logger.debug(f"NudeNet detected NSFW from bytes (max_score={max_score:.3f} > threshold={self.threshold})")
                 return True
 
-            if score > self.threshold:
-                logger.debug(f"NudeNet detected NSFW from bytes (score={score:.3f} > threshold={self.threshold})")
-                return True
-
-            logger.debug(f"NudeNet detected safe from bytes (score={score:.3f})")
+            logger.debug(f"NudeNet detected safe from bytes (max_score={max_score:.3f})")
             return False
         finally:
             # Clean up temp file
