@@ -9,13 +9,5 @@ google-auth>=2.23.0
 google-auth-oauthlib>=1.1.0
 
 # NSFW Detection (Optional - needed only if USE_NSFW_DETECTOR=true)
-# Choose one backend based on NSFW_BACKEND env variable
-
-# Option 1: NudeNet (lightweight, faster)
+# NudeNet (lightweight, faster)
 nudenet>=2.0.0
-
-# Option 2: PyTorch NSFW Detector (production-ready, more accurate)
-# Uncomment below if using NSFW_BACKEND=pytorch
-nsfw-detector>=1.0.0
-torch>=2.0.0
-torchvision>=0.15.0

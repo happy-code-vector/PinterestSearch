@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 from topics import get_all_topics, get_topics_for_categories
 from drive_uploader import DriveUploader, get_folder_id_from_url
-from nsfw_detector import NSFWDetector
+from nsfw_filter import NSFWDetector
 
 load_dotenv()
 
@@ -31,7 +31,6 @@ CONFIG = {
     "timeout": int(os.getenv("TIMEOUT_MS", "45000")),
     "proxy": os.getenv("PROXY", None) or None,
     "use_nsfw_detector": os.getenv("USE_NSFW_DETECTOR", "false").lower() == "true",
-    "nsfw_backend": os.getenv("NSFW_BACKEND", "nudenet"),
     "nsfw_threshold": float(os.getenv("NSFW_THRESHOLD", "0.7")),
     "max_concurrent_topics": int(os.getenv("MAX_CONCURRENT_TOPICS", "3")),
     "max_concurrent_downloads": int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "10")),
@@ -85,10 +84,7 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
     nsfw_detector = None
     if CONFIG["use_nsfw_detector"]:
         try:
-            nsfw_detector = NSFWDetector(
-                backend=CONFIG["nsfw_backend"],
-                threshold=CONFIG["nsfw_threshold"]
-            )
+            nsfw_detector = NSFWDetector(threshold=CONFIG["nsfw_threshold"])
             logger.info(f"NSFW filtering enabled: {nsfw_detector.get_backend_name()}")
         except ImportError as e:
             logger.error(f"Failed to initialize NSFW detector: {e}")
