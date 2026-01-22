@@ -17,6 +17,6 @@ google-auth==2.37.0
 nudenet==3.4.2
 
 # PyTorch backend (Alternative) - More accurate, requires PyTorch
-# torch==2.1.0
-# torchvision==0.16.0
-# Pillow==11.1.0
+torch==2.1.0
+torchvision==0.16.0
+Pillow==11.1.0
