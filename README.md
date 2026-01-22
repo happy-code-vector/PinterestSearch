@@ -6,6 +6,7 @@ Scrape Pinterest images across 300+ aesthetic topics organized by category with 
 
 - **Multi-topic batch processing** - Scrape all 300+ topics or specific categories
 - **Category organization** - Downloads organized by category and topic
+- **Google Drive upload** - Automatic upload to your Google Drive folder
 - **Duplicate detection** - Prevents collecting the same pins across topics
 - **NSFW text filtering** - Blocks inappropriate content based on keywords
 - **Concurrent processing** - Multiple topics scraped simultaneously
@@ -33,6 +34,8 @@ cp .env.example .env
 
 5. Edit `.env` with your settings
 
+6. (Optional) For Google Drive upload, see [Google Drive Setup](#google-drive-upload)
+
 ## Configuration
 
 Edit `.env` file to configure:
@@ -49,6 +52,8 @@ Edit `.env` file to configure:
 | `MAX_CONCURRENT_TOPICS` | Topics to process simultaneously | 3 |
 | `MAX_CONCURRENT_DOWNLOADS` | Image downloads simultaneously | 10 |
 | `LOG_LEVEL` | Logging level (DEBUG/INFO/WARNING/ERROR) | INFO |
+| `ENABLE_DRIVE_UPLOAD` | Upload to Google Drive after scraping | false |
+| `DRIVE_FOLDER_URL` | Google Drive folder URL | empty |
 
 ## Usage
 
@@ -145,6 +150,70 @@ USE_NSFW_DETECTOR=true
 NSFW_THRESHOLD=0.7
 ```
 
+## Google Drive Upload
+
+Automatically upload scraped content to Google Drive with proper folder structure.
+
+### Setup Google Drive API
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project
+3. Enable the Google Drive API:
+   - Search for "Google Drive API" and enable it
+4. Create OAuth credentials:
+   - Go to "Credentials" → "Create Credentials" → "OAuth client ID"
+   - Application type: "Desktop app"
+   - Download the credentials JSON file
+5. Rename the downloaded file to `credentials.json` and place it in the project root
+
+### Enable Upload
+
+Edit `.env`:
+```
+ENABLE_DRIVE_UPLOAD=true
+DRIVE_FOLDER_URL=https://drive.google.com/drive/folders/1C9WuerzHjYkV5gka6EsB1p9_1bRlAPZy
+```
+
+### Drive Folder Structure
+
+Content is uploaded with the same structure as local folders:
+```
+Google Drive Folder (your target)
+├── STUDY_ACADEMIA/
+│   ├── dark_academia/
+│   │   ├── images/
+│   │   │   ├── 123456789.jpg
+│   │   │   └── ...
+│   │   └── dark_academia_pins.json
+│   ├── light_academia/
+│   │   └── ...
+│   └── ...
+├── FOOD_COOKING/
+│   └── ...
+└── ...
+```
+
+### First Run
+
+When you run the scraper with Google Drive enabled for the first time:
+1. A browser window will open
+2. Sign in to your Google account
+3. Grant permission to access Google Drive
+4. The token is saved automatically for future runs
+
+### Upload Only (Skip Scraping)
+
+To upload existing local content without scraping:
+```python
+from drive_uploader import DriveUploader, get_folder_id_from_url
+from pathlib import Path
+
+uploader = DriveUploader()
+if uploader.authenticate():
+    folder_id = get_folder_id_from_url("your_folder_url")
+    results = uploader.upload_all(Path("pinterest_downloads"), folder_id)
+```
+
 ## Logging
 
 Logs are saved to `pinterest_scraper.log` and printed to console:
@@ -173,6 +242,11 @@ If Pinterest requires login, set `HEADLESS=false` and log in manually.
 - Playwright
 - aiohttp
 - python-dotenv
+
+### Optional (for Google Drive upload)
+- google-api-python-client
+- google-auth-oauthlib
+- google-auth
 
 ## License
 

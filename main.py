@@ -17,6 +17,7 @@ import aiohttp
 from dotenv import load_dotenv
 
 from topics import get_all_topics, get_topics_for_categories
+from drive_uploader import DriveUploader, get_folder_id_from_url
 
 # ===================== CONFIG =====================
 load_dotenv()
@@ -34,6 +35,8 @@ CONFIG = {
     "max_concurrent_topics": int(os.getenv("MAX_CONCURRENT_TOPICS", "3")),
     "max_concurrent_downloads": int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "10")),
     "log_level": os.getenv("LOG_LEVEL", "INFO"),
+    "enable_drive_upload": os.getenv("ENABLE_DRIVE_UPLOAD", "false").lower() == "true",
+    "drive_folder_url": os.getenv("DRIVE_FOLDER_URL", ""),
 }
 
 # NSFW blocklist - terms that indicate inappropriate content
@@ -385,6 +388,41 @@ async def scrape_all_topics():
     logger.info("Pins per category:")
     for category, count in sorted(tracker.category_progress.items(), key=lambda x: x[1], reverse=True):
         logger.info(f"  {category}: {count} pins")
+
+    # Upload to Google Drive if enabled
+    if CONFIG["enable_drive_upload"] and CONFIG["drive_folder_url"]:
+        logger.info("\n" + "="*60)
+        logger.info("Starting Google Drive upload...")
+        logger.info("="*60)
+
+        try:
+            uploader = DriveUploader()
+
+            if uploader.authenticate():
+                folder_id = get_folder_id_from_url(CONFIG["drive_folder_url"])
+                logger.info(f"Target folder ID: {folder_id}")
+
+                results = uploader.upload_all(output_base, folder_id)
+
+                # Print upload results
+                success_count = sum(1 for v in results.values() if v)
+                fail_count = len(results) - success_count
+
+                logger.info(f"\n{'='*60}")
+                logger.info(f"Upload complete: {success_count} succeeded, {fail_count} failed")
+                logger.info(f"{'='*60}\n")
+
+                for category, success in results.items():
+                    status = "✓" if success else "✗"
+                    logger.info(f"  {status} {category}")
+            else:
+                logger.error("Failed to authenticate with Google Drive")
+        except Exception as e:
+            logger.error(f"Google Drive upload failed: {e}")
+    elif CONFIG["enable_drive_upload"]:
+        logger.warning("Google Drive upload enabled but DRIVE_FOLDER_URL not set")
+    else:
+        logger.info("\nGoogle Drive upload disabled (set ENABLE_DRIVE_UPLOAD=true to enable)")
 
 if __name__ == "__main__":
     logger.info("="*60)

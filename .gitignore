@@ -218,6 +218,10 @@ images/
 session_data/
 cookies.json
 
+# Project Specific - Google Drive credentials
+credentials.json
+token.pkl
+
 # Playwright
 playwright-report/
 test-results/
