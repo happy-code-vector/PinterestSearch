@@ -19,7 +19,6 @@ from dotenv import load_dotenv
 from topics import get_all_topics, get_topics_for_categories
 from drive_uploader import DriveUploader, get_folder_id_from_url
 
-# ===================== CONFIG =====================
 load_dotenv()
 
 CONFIG = {
@@ -39,14 +38,12 @@ CONFIG = {
     "drive_folder_url": os.getenv("DRIVE_FOLDER_URL", ""),
 }
 
-# NSFW blocklist - terms that indicate inappropriate content
 NSFW_BLOCKLIST = [
     "nude", "naked", "sexy", "hot", "adult", "porn", "xxx", "erotic", "18+", "onlyfans",
     "bikini", "lingerie", "booty", "ass", "tits", "boobs", "cleavage", "thong", "nsfw",
     "sex", "topless", "underwear", "braless", "see-through", "explicit", "fetish",
 ]
 
-# ===================== LOGGING =====================
 def setup_logging():
     """Configure logging based on LOG_LEVEL."""
     log_level = getattr(logging, CONFIG["log_level"].upper(), logging.INFO)
