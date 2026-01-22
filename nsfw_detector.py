@@ -71,15 +71,11 @@ class NSFWDetector:
         Model is downloaded automatically on first use.
         """
         try:
-            from nsfw_detector import NSFWDetector as PyTorchNSFWDetector
+            from nsfw_detector import predict
 
-            # Initialize the detector - downloads model on first use
-            # Uses EfficientNet V2 by default (most accurate)
-            self._detector = PyTorchNSFWDetector()
-
-            # Model types available: 'inceptionv3', 'mobilenet_v2', 'efficientnet_v2'
-            # efficientnet_v2 is the most accurate but slower
-            # We'll use the default which is efficientnet_v2
+            # The nsfw_detector package uses a functional approach
+            # Store the predict function as our detector
+            self._detector = predict
             self._model_name = 'efficientnet_v2'
             self._backend_name = f"PyTorch ({self._model_name.upper()})"
 
@@ -246,7 +242,7 @@ class NSFWDetector:
         """Check NSFW using PyTorch."""
         try:
             # nsfw_detector.predict() returns: {'porn': prob, 'sexy': prob, 'hentai': prob, 'neutral': prob, 'drawings': prob}
-            predictions = self._detector.predict(image_path)
+            predictions = self._detector(image_path)
 
             # Get NSFW probability (sum of porn, sexy, hentai)
             nsfw_score = (
@@ -285,7 +281,7 @@ class NSFWDetector:
 
         try:
             # nsfw_detector.predict() returns: {'porn': prob, 'sexy': prob, 'hentai': prob, 'neutral': prob, 'drawings': prob}
-            predictions = self._detector.predict(tmp_path)
+            predictions = self._detector(tmp_path)
 
             # Get NSFW probability (sum of porn, sexy, hentai)
             nsfw_score = (
