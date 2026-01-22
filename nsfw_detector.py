@@ -125,6 +125,34 @@ class NSFWDetector:
 
         return False
 
+    def is_nsfw_from_bytes(self, image_bytes: bytes) -> bool:
+        """
+        Check if an image is NSFW from in-memory bytes.
+
+        This avoids saving the image to disk before checking NSFW,
+        saving bandwidth and disk I/O for images that will be filtered.
+
+        Args:
+            image_bytes: Image data as bytes
+
+        Returns:
+            True if image is NSFW, False otherwise
+        """
+        if not image_bytes:
+            logger.warning("Empty image bytes provided")
+            return False
+
+        try:
+            if self.backend == NSFWBackend.NUDENET.value:
+                return self._check_nudenet_from_bytes(image_bytes)
+            elif self.backend == NSFWBackend.PYTORCH.value:
+                return self._check_pytorch_from_bytes(image_bytes)
+        except Exception as e:
+            logger.error(f"Error checking NSFW from bytes: {e}")
+            return False
+
+        return False
+
     def _check_nudenet(self, image_path: str) -> bool:
         """Check NSFW using NudeNet."""
         result = self._detector.classify(image_path)
@@ -144,6 +172,71 @@ class NSFWDetector:
 
         logger.debug(f"NudeNet detected safe: {image_path} (score={score:.3f})")
         return False
+
+    def _check_nudenet_from_bytes(self, image_bytes: bytes) -> bool:
+        """Check NSFW using NudeNet from in-memory bytes."""
+        import tempfile
+
+        # NudeNet requires a file path, so save bytes to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+            tmp_file.write(image_bytes)
+            tmp_path = tmp_file.name
+
+        try:
+            result = self._detector.classify(tmp_path)
+
+            # NudeNet returns: {'unsafe': bool, 'score': float}
+            unsafe = result.get('unsafe', False)
+            score = result.get('score', 0.0)
+
+            # Use both unsafe flag and score threshold
+            if unsafe:
+                logger.debug(f"NudeNet detected NSFW from bytes (unsafe=True, score={score:.3f})")
+                return True
+
+            if score > self.threshold:
+                logger.debug(f"NudeNet detected NSFW from bytes (score={score:.3f} > threshold={self.threshold})")
+                return True
+
+            logger.debug(f"NudeNet detected safe from bytes (score={score:.3f})")
+            return False
+        finally:
+            # Clean up temp file
+            import os
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+
+    def _check_pytorch_from_bytes(self, image_bytes: bytes) -> bool:
+        """Check NSFW using PyTorch from in-memory bytes."""
+        try:
+            from io import BytesIO
+
+            # Load image from bytes
+            img = self._pil_image.open(BytesIO(image_bytes)).convert('RGB')
+            img_tensor = self._preprocess(img).unsqueeze(0)
+
+            # Run inference
+            with self._torch.no_grad():
+                outputs = self._detector(img_tensor)
+
+            # Get the predicted class and confidence
+            probabilities = self._torch.nn.functional.softmax(outputs[0], dim=0)
+            max_prob, predicted_class = self._torch.max(probabilities, 0)
+
+            logger.debug(
+                f"PyTorch check from bytes (class={predicted_class.item()}, "
+                f"prob={max_prob.item():.3f}) - Note: Using generic ResNet50"
+            )
+
+            # Using generic ResNet50, so always return False (safe)
+            # In production, use a model actually trained on NSFW data
+            return False
+
+        except Exception as e:
+            logger.error(f"PyTorch detection from bytes error: {e}")
+            return False
 
     def _check_pytorch(self, image_path: str) -> bool:
         """

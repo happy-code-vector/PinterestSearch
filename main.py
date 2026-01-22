@@ -92,7 +92,7 @@ async def download_image(session: aiohttp.ClientSession, image_url: str, save_pa
         return False
 
 async def download_images_batch(pins: List[Dict], category: str, topic: str, output_base: Path):
-    """Download multiple images concurrently."""
+    """Download multiple images concurrently with NSFW pre-check."""
     if not CONFIG["download_images"]:
         return
 
@@ -101,22 +101,62 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
 
     semaphore = asyncio.Semaphore(CONFIG["max_concurrent_downloads"])
 
+    # Initialize NSFW detector once if enabled
+    nsfw_detector = None
+    if CONFIG["use_nsfw_detector"]:
+        try:
+            nsfw_detector = NSFWDetector(
+                backend=CONFIG["nsfw_backend"],
+                threshold=CONFIG["nsfw_threshold"]
+            )
+            logger.info(f"NSFW filtering enabled: {nsfw_detector.get_backend_name()}")
+        except ImportError as e:
+            logger.error(f"Failed to initialize NSFW detector: {e}")
+            logger.info("Proceeding without NSFW image detection")
+
     async def download_with_semaphore(session: aiohttp.ClientSession, pin: Dict):
         async with semaphore:
             img_filename = f"{pin['pin_id']}.jpg"
             img_path = images_dir / img_filename
 
-            if not img_path.exists():
-                # Get higher resolution image URL
-                img_url = pin["image_url"].replace("236x", "originals").replace("564x", "originals")
-                success = await download_image(session, img_url, img_path)
-                if success:
-                    logger.debug(f"Downloaded: {img_filename}")
-                    return {"path": img_path, "success": True}
-                else:
-                    logger.debug(f"Failed: {img_filename}")
-                    return {"path": img_path, "success": False}
-            return {"path": img_path, "success": True}
+            if img_path.exists():
+                return {"path": img_path, "success": True, "skipped": False}
+
+            # NSFW pre-check using thumbnail before downloading full resolution
+            if nsfw_detector:
+                try:
+                    thumbnail_url = pin["image_url"]  # Already 236x from scraping
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': 'https://www.pinterest.com/'
+                    }
+
+                    async with session.get(thumbnail_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        if response.status == 200:
+                            thumbnail_bytes = await response.read()
+
+                            # Check NSFW on thumbnail before downloading full image
+                            is_nsfw = await asyncio.get_event_loop().run_in_executor(
+                                None, nsfw_detector.is_nsfw_from_bytes, thumbnail_bytes
+                            )
+
+                            if is_nsfw:
+                                logger.debug(f"Filtered NSFW image (pre-check): {img_filename}")
+                                return {"path": img_path, "success": False, "skipped": "NSFW"}
+                except Exception as e:
+                    logger.debug(f"NSFW pre-check failed for {img_filename}: {e}")
+                    # Continue with download if pre-check fails
+
+            # Download full resolution image
+            full_url = pin["image_url"].replace("236x", "originals").replace("564x", "originals")
+            success = await download_image(session, full_url, img_path)
+
+            if success:
+                logger.debug(f"Downloaded: {img_filename}")
+                return {"path": img_path, "success": True, "skipped": False}
+            else:
+                logger.debug(f"Failed: {img_filename}")
+                return {"path": img_path, "success": False, "skipped": False}
 
     # Use session properly
     async with aiohttp.ClientSession() as session:
@@ -124,53 +164,12 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         success_count = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
+        nsfw_filtered = sum(1 for r in results if isinstance(r, dict) and r.get("skipped") == "NSFW")
+
         logger.info(f"Downloaded {success_count}/{len(pins)} images for [{category}] {topic}")
 
-        # NSFW detection after download
-        if CONFIG["use_nsfw_detector"] and success_count > 0:
-            await filter_nsfw_images(results, category, topic)
-
-async def filter_nsfw_images(download_results: List[Dict], category: str, topic: str):
-    """Filter out NSFW images using AI detection."""
-    try:
-        detector = NSFWDetector(
-            backend=CONFIG["nsfw_backend"],
-            threshold=CONFIG["nsfw_threshold"]
-        )
-        logger.info(f"NSFW filtering enabled: {detector.get_backend_name()}")
-    except ImportError as e:
-        logger.error(f"Failed to initialize NSFW detector: {e}")
-        logger.info("Proceeding without NSFW image detection")
-        return
-
-    filtered_count = 0
-    total_checked = 0
-
-    for result in download_results:
-        if not isinstance(result, dict) or not result.get("success"):
-            continue
-
-        img_path = result["path"]
-        if not img_path.exists():
-            continue
-
-        total_checked += 1
-
-        # Run NSFW detection (blocking, but necessary)
-        is_nsfw = await asyncio.get_event_loop().run_in_executor(
-            None, detector.is_nsfw, str(img_path)
-        )
-
-        if is_nsfw:
-            img_path.unlink()  # Delete NSFW image
-            filtered_count += 1
-            logger.debug(f"Filtered NSFW image: {img_path.name}")
-
-    if total_checked > 0:
-        logger.info(
-            f"NSFW filter: Removed {filtered_count}/{total_checked} images "
-            f"for [{category}] {topic}"
-        )
+        if nsfw_filtered > 0:
+            logger.info(f"NSFW filter: Pre-checked and skipped {nsfw_filtered}/{len(pins)} images for [{category}] {topic}")
 
 async def human_like_scroll(page):
     """Smooth human-like scrolling."""
