@@ -60,7 +60,6 @@ def setup_logging():
 
 logger = setup_logging()
 
-# ===================== SAFETY FILTERS =====================
 def is_text_safe(title: str, description: str) -> bool:
     """Check if pin text is safe (no NSFW keywords)."""
     text = (title + " " + description).lower()
@@ -70,7 +69,6 @@ def get_pin_hash(pin_id: str) -> str:
     """Generate hash for deduplication."""
     return hashlib.md5(pin_id.encode()).hexdigest()[:16]
 
-# ===================== IMAGE DOWNLOAD =====================
 async def download_image(session: aiohttp.ClientSession, image_url: str, save_path: Path) -> bool:
     """Download image using HTTP request."""
     try:
@@ -120,7 +118,6 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
         tasks = [download_with_semaphore(pin) for pin in pins]
         await asyncio.gather(*tasks, return_exceptions=True)
 
-# ===================== HUMAN-LIKE BEHAVIOR =====================
 async def human_like_scroll(page):
     """Smooth human-like scrolling."""
     viewport_height = page.viewport_size["height"]
@@ -141,7 +138,6 @@ async def random_delay(min_sec: float = 1.8, max_sec: float = 4.2):
     """Random delay to mimic human behavior."""
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-# ===================== SCRAPER =====================
 async def scrape_topic(
     category: str,
     topic: str,
@@ -285,7 +281,6 @@ async def scrape_topic(
 
     return collected_pins
 
-# ===================== MAIN ORCHESTRATOR =====================
 class ProgressTracker:
     """Track and display scraping progress."""
     def __init__(self, total_topics: int):
@@ -391,7 +386,6 @@ async def scrape_all_topics():
     for category, count in sorted(tracker.category_progress.items(), key=lambda x: x[1], reverse=True):
         logger.info(f"  {category}: {count} pins")
 
-# ===================== ENTRY POINT =====================
 if __name__ == "__main__":
     logger.info("="*60)
     logger.info("Pinterest Multi-Topic Scraper")
