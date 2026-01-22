@@ -54,6 +54,9 @@ Edit `.env` file to configure:
 | `LOG_LEVEL` | Logging level (DEBUG/INFO/WARNING/ERROR) | INFO |
 | `ENABLE_DRIVE_UPLOAD` | Upload to Google Drive after scraping | false |
 | `DRIVE_FOLDER_URL` | Google Drive folder URL | empty |
+| `USE_NSFW_DETECTOR` | Enable AI image NSFW detection | false |
+| `NSFW_BACKEND` | Detection backend (nudenet/pytorch) | nudenet |
+| `NSFW_THRESHOLD` | NSFW threshold (0.0-1.0) | 0.7 |
 
 ## Usage
 
@@ -148,25 +151,61 @@ pinterest_downloads/
 
 ## NSFW Filtering
 
-### Text-Based Filtering (Default)
-The scraper filters out pins with NSFW keywords in title/description:
+The scraper includes two layers of NSFW protection:
+
+### 1. Text-Based Filtering (Always Active)
+Filters out pins with NSFW keywords in title/description:
 - nude, naked, sexy, hot, adult, porn, xxx, erotic, 18+, onlyfans
 - bikini, lingerie, booty, ass, tits, boobs, cleavage, thong
 - sex, topless, underwear, braless, see-through, explicit, fetish
 
-### Image-Based Filtering (Optional)
-For enhanced NSFW detection using AI:
+### 2. Image-Based AI Detection (Optional)
 
-1. Install additional dependencies:
+**Available Backends:**
+
+| Backend | Pros | Cons | Best For |
+|---------|------|------|----------|
+| **NudeNet** | Lightweight (20MB), fast (0.1-0.3s/image), no heavy dependencies | May miss some edge cases | Google Colab, CPU, general use |
+| **PyTorch** | More accurate with proper model, GPU support | Heavy (500MB+), requires PyTorch, complex setup | Production, GPU available |
+
+**Installation:**
+
+**Option A: NudeNet (Recommended)**
 ```bash
-pip install tensorflow nudenet Pillow
+pip install nudenet==3.4.2
 ```
 
-2. Enable in `.env`:
+**Option B: PyTorch**
+```bash
+pip install torch==2.1.0 torchvision==0.16.0 Pillow==11.1.0
+```
+
+**Configuration (.env):**
 ```
 USE_NSFW_DETECTOR=true
+NSFW_BACKEND=nudenet
 NSFW_THRESHOLD=0.7
 ```
+
+**Threshold Guide:**
+- `0.5` - Balanced filtering
+- `0.7` - Recommended (fewer false positives)
+- `0.9` - Very strict (may filter safe content)
+
+**How It Works:**
+1. Images are downloaded first
+2. AI detector scans each downloaded image
+3. NSFW images are automatically deleted
+4. Logs show how many images were filtered per topic
+
+**Example Output:**
+```
+[INFO] NSFW filtering enabled: NudeNet
+[INFO] Downloaded 50/50 images for [STUDY_ACADEMIA] dark_academia
+[INFO] NSFW filter: Removed 2/50 images for [STUDY_ACADEMIA] dark_academia
+```
+
+**Note:** For PyTorch backend, the default implementation uses a generic ResNet50 model. For production use with actual NSFW detection, you would need a model trained on NSFW datasets. NudeNet is recommended as it's purpose-built for this task.
 
 ## Google Drive Upload
 
@@ -257,7 +296,7 @@ If Pinterest requires login, set `HEADLESS=false` and log in manually.
 ## Requirements
 
 - Python 3.10+
-- Playwright
+- playwright
 - aiohttp
 - python-dotenv
 
@@ -265,6 +304,11 @@ If Pinterest requires login, set `HEADLESS=false` and log in manually.
 - google-api-python-client
 - google-auth-oauthlib
 - google-auth
+
+### Optional (for NSFW image detection)
+Choose one:
+- **NudeNet (Recommended):** nudenet
+- **PyTorch:** torch, torchvision, Pillow
 
 ## License
 

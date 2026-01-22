@@ -11,7 +11,12 @@ google-auth-oauthlib==1.2.1
 google-auth==2.37.0
 
 # Optional: Image-based NSFW detection
-# Uncomment to enable image-based NSFW filtering
-# tensorflow==2.18.0
-# nudenet==3.1.0
+# Choose ONE of the following backends:
+
+# NudeNet (Recommended) - Lightweight, fast, no heavy dependencies
+nudenet==3.4.2
+
+# PyTorch backend (Alternative) - More accurate, requires PyTorch
+# torch==2.1.0
+# torchvision==0.16.0
 # Pillow==11.1.0

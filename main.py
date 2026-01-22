@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 
 from topics import get_all_topics, get_topics_for_categories
 from drive_uploader import DriveUploader, get_folder_id_from_url
+from nsfw_detector import NSFWDetector
 
 load_dotenv()
 
@@ -30,6 +31,7 @@ CONFIG = {
     "timeout": int(os.getenv("TIMEOUT_MS", "45000")),
     "proxy": os.getenv("PROXY", None) or None,
     "use_nsfw_detector": os.getenv("USE_NSFW_DETECTOR", "false").lower() == "true",
+    "nsfw_backend": os.getenv("NSFW_BACKEND", "nudenet"),
     "nsfw_threshold": float(os.getenv("NSFW_THRESHOLD", "0.7")),
     "max_concurrent_topics": int(os.getenv("MAX_CONCURRENT_TOPICS", "3")),
     "max_concurrent_downloads": int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "10")),
@@ -110,19 +112,65 @@ async def download_images_batch(pins: List[Dict], category: str, topic: str, out
                 success = await download_image(session, img_url, img_path)
                 if success:
                     logger.debug(f"Downloaded: {img_filename}")
-                    return True
+                    return {"path": img_path, "success": True}
                 else:
                     logger.debug(f"Failed: {img_filename}")
-                    return False
-            return True
+                    return {"path": img_path, "success": False}
+            return {"path": img_path, "success": True}
 
     # Use session properly
     async with aiohttp.ClientSession() as session:
         tasks = [download_with_semaphore(session, pin) for pin in pins]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        success_count = sum(1 for r in results if r is True)
+
+        success_count = sum(1 for r in results if isinstance(r, dict) and r.get("success"))
         logger.info(f"Downloaded {success_count}/{len(pins)} images for [{category}] {topic}")
+
+        # NSFW detection after download
+        if CONFIG["use_nsfw_detector"] and success_count > 0:
+            await filter_nsfw_images(results, category, topic)
+
+async def filter_nsfw_images(download_results: List[Dict], category: str, topic: str):
+    """Filter out NSFW images using AI detection."""
+    try:
+        detector = NSFWDetector(
+            backend=CONFIG["nsfw_backend"],
+            threshold=CONFIG["nsfw_threshold"]
+        )
+        logger.info(f"NSFW filtering enabled: {detector.get_backend_name()}")
+    except ImportError as e:
+        logger.error(f"Failed to initialize NSFW detector: {e}")
+        logger.info("Proceeding without NSFW image detection")
+        return
+
+    filtered_count = 0
+    total_checked = 0
+
+    for result in download_results:
+        if not isinstance(result, dict) or not result.get("success"):
+            continue
+
+        img_path = result["path"]
+        if not img_path.exists():
+            continue
+
+        total_checked += 1
+
+        # Run NSFW detection (blocking, but necessary)
+        is_nsfw = await asyncio.get_event_loop().run_in_executor(
+            None, detector.is_nsfw, str(img_path)
+        )
+
+        if is_nsfw:
+            img_path.unlink()  # Delete NSFW image
+            filtered_count += 1
+            logger.debug(f"Filtered NSFW image: {img_path.name}")
+
+    if total_checked > 0:
+        logger.info(
+            f"NSFW filter: Removed {filtered_count}/{total_checked} images "
+            f"for [{category}] {topic}"
+        )
 
 async def human_like_scroll(page):
     """Smooth human-like scrolling."""
