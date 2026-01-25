@@ -140,6 +140,25 @@ PINTEREST_TOPICS = {
     "COUPLE": [
         "couple aesthetic",
     ],
+
+    "ISLAMIC_MODEST_FASHION": [
+        # Directly Related
+        "hijab fashion aesthetic", "abaya style aesthetic", "modest fashion aesthetic",
+        "islamic art aesthetic", "islamic architecture aesthetic", "masjid aesthetic",
+        "quranic calligraphy aesthetic", "ramadan aesthetic",
+        
+        # Cultural & Regional
+        "middle eastern aesthetic", "turkish aesthetic", "moroccan aesthetic",
+        "arabic calligraphy aesthetic", "persian aesthetic", "iranian aesthetic",
+        
+        # Complementary Lifestyle
+        "minimalist modest fashion", "earthy tones aesthetic", "cottagecore modest",
+        "academic modest style", "cozy modest home aesthetic",
+        
+        # Spiritual & Inspirational
+        "islamic quotes aesthetic", "dua aesthetic", "spiritual growth aesthetic",
+        "peaceful living aesthetic",
+    ],
 }
 
 # Get all topics as a flat list
