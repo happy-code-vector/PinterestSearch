@@ -146,18 +146,66 @@ PINTEREST_TOPICS = {
         "hijab fashion aesthetic", "abaya style aesthetic", "modest fashion aesthetic",
         "islamic art aesthetic", "islamic architecture aesthetic", "masjid aesthetic",
         "quranic calligraphy aesthetic", "ramadan aesthetic",
-        
+
         # Cultural & Regional
         "middle eastern aesthetic", "turkish aesthetic", "moroccan aesthetic",
         "arabic calligraphy aesthetic", "persian aesthetic", "iranian aesthetic",
-        
+
         # Complementary Lifestyle
         "minimalist modest fashion", "earthy tones aesthetic", "cottagecore modest",
         "academic modest style", "cozy modest home aesthetic",
-        
+
         # Spiritual & Inspirational
         "islamic quotes aesthetic", "dua aesthetic", "spiritual growth aesthetic",
         "peaceful living aesthetic",
+    ],
+
+    "PETS_ANIMALS": [
+        # Dogs
+        "golden retriever aesthetic", "dog walking aesthetic", "puppies", "dog park vibes",
+        "cozy dog", "dogs in sweaters", "dog and owner", "morning dog walk", "dogs in nature",
+        "hiking with dogs", "beach dog", "dog cuddling", "dog sleeping", "aesthetic dog photos",
+        "dogs in cars", "adventure dog", "city dog walks", "dog friendly cafe", "fluffy dogs",
+        "small dog aesthetic", "big dog energy",
+
+        # Cats
+        "cat aesthetic", "cats and books", "cozy cat", "cat naps", "cats in windows",
+        "cats and plants", "orange cat energy", "black cat aesthetic", "cat cafe", "kittens",
+        "cats in sweaters", "cats and coffee", "aesthetic cat photos", "cat lady vibes",
+        "cats sleeping", "cat playing", "cats in sunlight", "cats and yarn", "cat tower",
+        "indoor cat life",
+
+        # Small Pets
+        "bunny aesthetic", "rabbit care", "guinea pig aesthetic", "hamster cage",
+        "small pet setup", "bunny cuddles", "pet rabbit", "cute rodents", "pet care aesthetic",
+        "bunny in garden", "dwarf bunny", "flemish giant", "lop eared bunny",
+
+        # Pet Lifestyle
+        "pet friendly travel", "dogs in cars", "pets at beach", "hiking with pets",
+        "pet hotel", "dog friendly cafe", "cat cafe aesthetic", "pet spa day", "grooming day",
+        "pet photoshoot", "pets and nature", "camping with pets", "road trip with pets",
+
+        # Pet Care/Home
+        "pet corner aesthetic", "dog bed aesthetic", "cat tree", "pet supplies organization",
+        "pet feeding station", "pet toy storage", "cozy pet space", "pet room",
+        "dog crate aesthetic", "litter box area", "pet washing station", "pet grooming at home",
+        "DIY pet projects",
+
+        # Pet Fashion/Accessories
+        "dogs in bandanas", "pet sweaters", "dog collar aesthetic", "cat harness",
+        "pet accessories", "dog backpack", "pet bowties", "seasonal pet outfits",
+        "halloween pet costumes", "pet birthday party",
+
+        # Pet Activities
+        "fetch time", "dogs playing", "cats playing with toys", "pet training",
+        "puppy training", "agility course", "dog tricks", "pets eating", "treat time",
+        "snack time for pets", "pets and babies", "pets and kids", "multi pet household",
+        "dogs meeting", "cat and dog friendship", "unlikely animal friends",
+
+        # Seasonal Pet Content
+        "pets in autumn", "dogs in leaves", "pets in snow", "winter pets", "pets in spring flowers",
+        "summer pets", "pets by pool", "pets in halloween costumes", "christmas pets",
+        "pets by fireplace", "cozy winter pets",
     ],
 }
 
