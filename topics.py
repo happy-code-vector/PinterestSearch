@@ -160,6 +160,10 @@ PINTEREST_TOPICS = {
         "peaceful living aesthetic",
     ],
 
+    "HOMESCHOOL_CLASSROOM": [
+        "kids and tutor studying in the homeschool",
+    ],
+
     "PETS_ANIMALS": [
         # Dogs
         "golden retriever aesthetic", "dog walking aesthetic", "puppies", "dog park vibes",
