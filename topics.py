@@ -161,7 +161,7 @@ PINTEREST_TOPICS = {
     ],
 
     "HOMESCHOOL_CLASSROOM": [
-        "kids and tutor studying in the homeschool", "kids studying in the homeschool",
+        "homeschooling aesthetic", "kids and tutor studying in the homeschool", "kids studying in the homeschool",
         "kids together studying in the homeschool", 
     ],
 
