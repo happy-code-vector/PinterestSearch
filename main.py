@@ -7,6 +7,7 @@ import asyncio
 import random
 import json
 import os
+import sys
 import logging
 import hashlib
 from pathlib import Path
@@ -26,6 +27,7 @@ CONFIG = {
     "categories": os.getenv("CATEGORIES", "ALL"),
     "max_pins_per_topic": int(os.getenv("MAX_PINS_PER_TOPIC", "100")),
     "output_folder": os.getenv("OUTPUT_FOLDER", "pinterest_downloads"),
+    "storage_state_file": os.getenv("STORAGE_STATE_FILE", "storage_state.json"),
     "download_images": os.getenv("DOWNLOAD_IMAGES", "true").lower() == "true",
     "headless": os.getenv("HEADLESS", "true").lower() == "true",
     # Use an installed browser instead of Playwright's bundled Chromium
@@ -40,6 +42,7 @@ CONFIG = {
     "log_level": os.getenv("LOG_LEVEL", "INFO"),
     "enable_drive_upload": os.getenv("ENABLE_DRIVE_UPLOAD", "false").lower() == "true",
     "drive_folder_url": os.getenv("DRIVE_FOLDER_URL", ""),
+    "max_scroll_iterations": int(os.getenv("MAX_SCROLL_ITERATIONS", "40")),
 }
 
 NSFW_BLOCKLIST = [
@@ -72,6 +75,58 @@ def is_text_safe(title: str, description: str) -> bool:
 def get_pin_hash(pin_id: str) -> str:
     """Generate hash for deduplication."""
     return hashlib.md5(pin_id.encode()).hexdigest()[:16]
+
+async def login_and_save_state():
+    """
+    Open a visible browser so the user can log in to Pinterest manually.
+    Saves the session to the storage state file for reuse by headless runs.
+    """
+    state_path = Path(CONFIG["storage_state_file"])
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=False,
+            channel=CONFIG["browser_channel"] or None,
+            proxy={"server": CONFIG["proxy"]} if CONFIG["proxy"] else None,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            locale="en-US",
+        )
+        page = await context.new_page()
+        await page.goto("https://www.pinterest.com/login", wait_until="domcontentloaded", timeout=CONFIG["timeout"])
+
+        logger.info("Browser opened - please log in to Pinterest in the browser window.")
+        logger.info("Waiting for login to complete (checking every 5 seconds, up to 5 minutes)...")
+
+        import time
+        deadline = time.time() + 300
+        logged_in = False
+        while time.time() < deadline:
+            await asyncio.sleep(5)
+            try:
+                cookies = await context.cookies()
+                if any(c["name"] == "_auth" and c["value"] == "1" for c in cookies):
+                    logged_in = True
+                    break
+            except Exception:
+                pass
+
+        if not logged_in:
+            await browser.close()
+            logger.error("Login not detected within 5 minutes. Session NOT saved.")
+            return False
+
+        await context.storage_state(path=str(state_path))
+        await browser.close()
+        logger.info(f"Login detected. Session saved to {state_path}")
+        logger.info("You can now run the scraper normally (headless) - it will reuse this session.")
+        return True
+
+def has_saved_session() -> bool:
+    """Check whether a saved Pinterest session exists."""
+    return Path(CONFIG["storage_state_file"]).exists()
 
 async def download_images_batch(pins: List[Dict], category: str, topic: str, output_base: Path):
     """Download multiple images concurrently with NSFW filtering on full-resolution images."""
@@ -213,6 +268,7 @@ async def scrape_topic(
                 )
 
                 context = await browser.new_context(
+                    storage_state=CONFIG["storage_state_file"] if has_saved_session() else None,
                     viewport={"width": 1920, "height": 1080},
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                     locale="en-US",
@@ -261,6 +317,21 @@ async def scrape_topic(
                 search_url = f"https://www.pinterest.com/search/pins/?q={topic.replace(' ', '%20')}"
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=CONFIG["timeout"])
 
+                # Fail fast if Pinterest is showing the logged-out login wall
+                # (results are gated, no pin links, no infinite scroll - scraping is impossible)
+                await asyncio.sleep(2)
+                gating = await page.evaluate("""
+                    () => ({
+                        gated: document.querySelectorAll('[data-test-id="gated-pin-rep"]').length,
+                        pinLinks: document.querySelectorAll('a[href*="/pin/"]').length,
+                    })
+                """)
+                if gating["gated"] > 0 and gating["pinLinks"] == 0:
+                    raise PermissionError(
+                        "Pinterest login wall detected (session missing or expired). "
+                        "Run 'python main.py --login' once to save a session, then retry."
+                    )
+
                 try:
                     # Accept cookies if popup appears
                     try:
@@ -270,71 +341,82 @@ async def scrape_topic(
 
                     last_height = await page.evaluate("document.body.scrollHeight")
                     scroll_attempts = 0
+                    total_iterations = 0
                     max_scrolls = 50
+                    max_iterations = CONFIG["max_scroll_iterations"]
 
-                    while len(collected_pins) < CONFIG["max_pins_per_topic"] and scroll_attempts < max_scrolls:
+                    # Extract all visible pin data in a single JS round-trip
+                    # (much faster than per-element Playwright queries).
+                    extract_js = """
+                    () => {
+                        const pins = [];
+                        const containers = document.querySelectorAll('div[data-test-id="pin"], div[data-test-id="pin-wrapper"]');
+                        for (const el of containers) {
+                            const link = el.querySelector('a[href*="/pin/"]');
+                            const img = el.querySelector('img[src*="pinimg.com"]');
+                            const titleEl = el.querySelector('div[data-test-id="pin-title"], div[data-test-id="pin-title-field"]');
+                            const descEl = el.querySelector('div[data-test-id="pin-description"], div[data-test-id="pin-description-field"]');
+                            if (!link || !img) continue;
+                            const pinId = (link.getAttribute('href') || '').split('/pin/')[1]?.split('/')[0] || '';
+                            if (!pinId) continue;
+                            pins.push({
+                                pin_id: pinId,
+                                pin_url: link.href,
+                                title: titleEl ? titleEl.innerText.trim() : '',
+                                description: descEl ? descEl.innerText.trim() : '',
+                                image_url: img.src,
+                            });
+                        }
+                        return pins;
+                    }
+                    """
+
+                    while (len(collected_pins) < CONFIG["max_pins_per_topic"]
+                           and scroll_attempts < max_scrolls
+                           and total_iterations < max_iterations):
                         await human_like_scroll(page)
                         await random_mouse_move(page)
                         await random_delay()
+                        total_iterations += 1
 
-                        # Get current pin elements
-                        pin_elements = await page.query_selector_all('div[data-test-id="pin"]')
+                        # Extract pin data currently visible on the page
+                        page_pins = await page.evaluate(extract_js)
 
-                        for pin_el in pin_elements:
+                        for pin in page_pins:
                             if len(collected_pins) >= CONFIG["max_pins_per_topic"]:
                                 break
 
-                            try:
-                                # Extract pin data
-                                title_el = await pin_el.query_selector('div[data-test-id="pin-title"]')
-                                title = await title_el.inner_text() if title_el else ""
-                                title = title.strip()
+                            pin_id = pin["pin_id"]
+                            pin_hash = get_pin_hash(pin_id)
 
-                                desc_el = await pin_el.query_selector('div[data-test-id="pin-description"]')
-                                description = await desc_el.inner_text() if desc_el else ""
-                                description = description.strip()
-
-                                img_el = await pin_el.query_selector('img[src*="pinimg.com"]')
-                                img_src = await img_el.get_attribute("src") if img_el else None
-
-                                link_el = await pin_el.query_selector('a[href*="/pin/"]')
-                                pin_url = await link_el.get_attribute("href") if link_el else ""
-                                pin_id = pin_url.split("/pin/")[-1].split("/")[0] if pin_url else ""
-
-                                if img_src and pin_id:
-                                    pin_hash = get_pin_hash(pin_id)
-
-                                    # Check duplicates
-                                    if pin_hash in collected_hashes:
-                                        continue
-
-                                    # Safety check
-                                    if not is_text_safe(title, description):
-                                        logger.debug(f"Filtered NSFW pin: {title[:50]}")
-                                        continue
-
-                                    pin_data = {
-                                        "pin_id": pin_id,
-                                        "title": title,
-                                        "description": description,
-                                        "image_url": img_src,
-                                        "pin_url": f"https://www.pinterest.com{pin_url}" if pin_url else "",
-                                        "category": category,
-                                        "topic": topic,
-                                        "scraped_at": datetime.now().isoformat(),
-                                    }
-
-                                    collected_pins.append(pin_data)
-                                    collected_hashes.add(pin_hash)
-
-                                    if progress_callback:
-                                        progress_callback(category, topic, len(collected_pins))
-
-                                    logger.debug(f"[{category}] {topic}: Found pin {len(collected_pins)}")
-
-                            except Exception as e:
-                                logger.debug(f"Error processing pin element: {e}")
+                            # Check duplicates
+                            if pin_hash in collected_hashes:
                                 continue
+
+                            # Safety check
+                            if not is_text_safe(pin["title"], pin["description"]):
+                                logger.debug(f"Filtered NSFW pin: {pin['title'][:50]}")
+                                continue
+
+                            pin_data = {
+                                "pin_id": pin_id,
+                                "title": pin["title"],
+                                "description": pin["description"],
+                                "image_url": pin["image_url"],
+                                "pin_url": pin["pin_url"],
+                                "category": category,
+                                "topic": topic,
+                                "scraped_at": datetime.now().isoformat(),
+                            }
+
+                            collected_pins.append(pin_data)
+                            collected_hashes.add(pin_hash)
+
+                            if progress_callback:
+                                progress_callback(category, topic, len(collected_pins))
+
+                        if len(collected_pins) >= CONFIG["max_pins_per_topic"]:
+                            break
 
                         # Check if we stopped loading new content
                         new_height = await page.evaluate("document.body.scrollHeight")
@@ -343,9 +425,6 @@ async def scrape_topic(
                         else:
                             scroll_attempts = 0
                             last_height = new_height
-
-                        if len(collected_pins) >= CONFIG["max_pins_per_topic"]:
-                            break
 
                 except Exception as e:
                     logger.error(f"Error during scraping [{category}] {topic}: {e}")
@@ -358,6 +437,10 @@ async def scrape_topic(
                     break
 
         except Exception as e:
+            if isinstance(e, PermissionError):
+                # Login wall - retrying won't help, abort now
+                logger.error(f"[{category}] {topic}: {e}")
+                return []
             logger.error(f"Attempt {attempt + 1} failed for [{category}] {topic}: {e}")
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 5  # Exponential backoff
@@ -509,15 +592,22 @@ async def scrape_all_topics():
         logger.info("\nGoogle Drive upload disabled (set ENABLE_DRIVE_UPLOAD=true to enable)")
 
 if __name__ == "__main__":
-    logger.info("="*60)
-    logger.info("Pinterest Multi-Topic Scraper")
-    logger.info("="*60)
-    logger.info(f"Configuration:")
-    logger.info(f"  Categories: {CONFIG['categories']}")
-    logger.info(f"  Max pins per topic: {CONFIG['max_pins_per_topic']}")
-    logger.info(f"  Download images: {CONFIG['download_images']}")
-    logger.info(f"  Headless: {CONFIG['headless']}")
-    logger.info(f"  Concurrent topics: {CONFIG['max_concurrent_topics']}")
-    logger.info("="*60 + "\n")
+    if "--login" in sys.argv:
+        logger.info("="*60)
+        logger.info("Pinterest Login - saves session for the scraper")
+        logger.info("="*60)
+        asyncio.run(login_and_save_state())
+    else:
+        logger.info("="*60)
+        logger.info("Pinterest Multi-Topic Scraper")
+        logger.info("="*60)
+        logger.info(f"Configuration:")
+        logger.info(f"  Categories: {CONFIG['categories']}")
+        logger.info(f"  Max pins per topic: {CONFIG['max_pins_per_topic']}")
+        logger.info(f"  Download images: {CONFIG['download_images']}")
+        logger.info(f"  Headless: {CONFIG['headless']}")
+        logger.info(f"  Concurrent topics: {CONFIG['max_concurrent_topics']}")
+        logger.info(f"  Pinterest session: {'loaded from ' + CONFIG['storage_state_file'] if has_saved_session() else 'NONE (run: python main.py --login)'}")
+        logger.info("="*60 + "\n")
 
-    asyncio.run(scrape_all_topics())
+        asyncio.run(scrape_all_topics())

@@ -227,3 +227,5 @@ playwright-report/
 test-results/
 
 .claude
+# Pinterest login session (contains cookies - do not commit)
+storage_state.json

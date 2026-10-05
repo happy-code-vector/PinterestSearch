@@ -60,6 +60,17 @@ Edit `.env` file to configure:
 
 ## Usage
 
+### First-Time Setup: Pinterest Login (Required)
+Pinterest requires a logged-in session to show search results. Without it,
+the scraper aborts immediately with a login-wall error.
+
+Log in once (opens a browser window, wait for the script to confirm):
+```bash
+python main.py --login
+```
+This saves your session to `storage_state.json` (git-ignored). Headless runs
+reuse it automatically. If the session expires later, just run `--login` again.
+
 ### Scrape All Categories
 ```bash
 python main.py
