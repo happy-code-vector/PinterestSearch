@@ -28,6 +28,9 @@ CONFIG = {
     "output_folder": os.getenv("OUTPUT_FOLDER", "pinterest_downloads"),
     "download_images": os.getenv("DOWNLOAD_IMAGES", "true").lower() == "true",
     "headless": os.getenv("HEADLESS", "true").lower() == "true",
+    # Use an installed browser instead of Playwright's bundled Chromium
+    # (e.g. "chrome" or "msedge"). Empty = bundled Chromium.
+    "browser_channel": os.getenv("BROWSER_CHANNEL", ""),
     "timeout": int(os.getenv("TIMEOUT_MS", "45000")),
     "proxy": os.getenv("PROXY", None) or None,
     "use_nsfw_detector": os.getenv("USE_NSFW_DETECTOR", "false").lower() == "true",
@@ -199,6 +202,7 @@ async def scrape_topic(
             async with async_playwright() as p:
                 browser = await p.chromium.launch(
                     headless=CONFIG["headless"],
+                    channel=CONFIG["browser_channel"] or None,
                     proxy={"server": CONFIG["proxy"]} if CONFIG["proxy"] else None,
                     args=[
                         "--no-sandbox",

@@ -162,7 +162,15 @@ PINTEREST_TOPICS = {
 
     "HOMESCHOOL_CLASSROOM": [
         "homeschooling aesthetic", "kids and tutor studying in the homeschool", "kids studying in the homeschool",
-        "kids together studying in the homeschool", 
+        "kids together studying in the homeschool",
+    ],
+
+    "FOOD_LABELS": [
+        "reading food labels",
+        "person reading nutrition facts label on food package in grocery store",
+        "grocery shopping",
+        "woman reading ingredients grocery store",
+        "reading ingredients grocery store",
     ],
 
     "PETS_ANIMALS": [
